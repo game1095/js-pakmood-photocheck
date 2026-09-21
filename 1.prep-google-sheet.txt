@@ -1,0 +1,60 @@
+function doPost(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var data = JSON.parse(e.postData.contents);
+    
+    // --- ฟังก์ชันใหม่: ตรวจสอบว่าเป็นการส่งเพื่อ "อัปเดตสถานะ" หรือไม่ ---
+    if (data.action === "updateStatus") {
+      var searchId = data.id;
+      var statusMsg = data.hasImage ? "มีรูปถ่าย" : "ไม่มีรูป";
+      var imageDetail = data.imageDetail || "-"; // ข้อมูลรูป
+      
+      var values = sheet.getDataRange().getValues();
+      // ค้นหาแถวที่มีรหัสใบงานตรงกัน
+      for (var i = 0; i < values.length; i++) {
+        if (values[i][0] === searchId) {
+          // อัปเดต Column B (สถานะ) และ Column C (ข้อมูลรูป)
+          sheet.getRange(i + 1, 2).setValue(statusMsg);
+          sheet.getRange(i + 1, 3).setValue(imageDetail);
+          return ContentService.createTextOutput("Updated successfully").setMimeType(ContentService.MimeType.TEXT);
+        }
+      }
+      return ContentService.createTextOutput("ID not found").setMimeType(ContentService.MimeType.TEXT);
+    }
+    
+    // --- ฟังก์ชันเดิม (จาก 1.prep-google-sheet.txt) ---
+    var ids = data.ids;
+    if (ids && ids.length > 0) {
+      var rows = ids.map(function(id) { return [id]; });
+      sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 1).setValues(rows);
+    }
+    
+    return ContentService.createTextOutput("Success").setMimeType(ContentService.MimeType.TEXT);
+  } catch (err) {
+    return ContentService.createTextOutput("Error: " + err.message).setMimeType(ContentService.MimeType.TEXT);
+  }
+}
+
+// เพิ่มฟังก์ชัน doGet เพื่อให้หน้าเว็บดึงรหัสใบงานที่ "ยังไม่ได้ทำงาน" (Column B ว่าง) กลับไปทำ
+function doGet(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var values = sheet.getDataRange().getValues();
+    var pendingJobs = [];
+    
+    for (var i = 0; i < values.length; i++) {
+      var id = values[i][0];
+      var status = values[i][1];
+      // เลือกรหัสใบงานที่คอลัมน์ A มีข้อมูล แต่คอลัมน์ B (สถานะ) ยังว่าง
+      if (id && id !== "" && !status) {
+        pendingJobs.push(id);
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ pendingJobs: pendingJobs }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}

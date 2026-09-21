@@ -1,0 +1,144 @@
+async function autoProcessJobs() {
+  // ⚠️ นำ Web App URL ที่ได้จาก Apps Script มาวางตรงนี้
+  const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwnwtArSwDVd_4V_ezI54ukxmPWLp1ZWQZyM8fzj_4v_jgCkyMZTPJS_q5ZFmr5tgQUnA/exec';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  console.log("🚀 เริ่มต้นระบบจัดการใบงานอัตโนมัติ...");
+
+  let pendingJobs = [];
+  try {
+    const response = await fetch(WEB_APP_URL);
+    const data = await response.json();
+    pendingJobs = data.pendingJobs || [];
+    console.log(`📋 พบใบงานที่ต้องดำเนินการ: ${pendingJobs.length} รายการ`);
+  } catch (error) {
+    console.error("❌ ไม่สามารถดึงข้อมูลจาก Google Sheet ได้:", error);
+    return;
+  }
+
+  for (let i = 0; i < pendingJobs.length; i++) {
+    let jobId = pendingJobs[i];
+    console.log(`\n▶️ กำลังดำเนินการใบงานที่ ${i + 1}/${pendingJobs.length} : ${jobId}`);
+
+    try {
+      // 1: ค้นหาใบงาน
+      let searchInput = document.querySelector('input[name="orderId"], input[placeholder="ค้นหาใบงาน"]');
+      if (!searchInput) throw new Error("ไม่พบช่องค้นหาใบงาน");
+      
+      searchInput.value = jobId;
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+      
+      await sleep(3000); 
+
+      // 2: กดเข้าไปที่รหัสใบงาน
+      let allTd = Array.from(document.querySelectorAll('td.cursor-pointer'));
+      let targetTd = allTd.find(td => td.innerText.includes(jobId));
+      if (!targetTd) throw new Error("ไม่พบรายการใบงานจากผลการค้นหา");
+      targetTd.click();
+      
+      await sleep(3000);
+
+      // 3: กด Tab "แบบสำรวจ"
+      let surveyTab = Array.from(document.querySelectorAll('a')).find(a => a.innerText.includes('แบบสำรวจ'));
+      if (surveyTab) surveyTab.click();
+      
+      // 4: วนลูปรอให้รูปภาพโหลด (เช็คทุก 1 วิ สูงสุด 10 วิ)
+      let hasImage = false;
+      let imageDetail = "ไม่มีรูปภาพ";
+      let maxWaitTime = 10; 
+      
+      console.log("⏳ กำลังตรวจสอบและรอรูปภาพโหลด...");
+      for (let w = 0; w < maxWaitTime; w++) {
+        let imageLabels = Array.from(document.querySelectorAll('label')).filter(l => l.innerText.includes('รูปเพิ่มเติม'));
+        
+        if (imageLabels.length > 0) {
+          let parentArea = imageLabels[0].parentElement.parentElement; 
+          let imgs = Array.from(parentArea.querySelectorAll('img'));
+          
+          // กรองเอาไอคอนโหลดหรือ SVG ออกไปอย่างเด็ดขาด
+          let realImages = imgs.filter(img => !img.src.includes('image/svg') && !img.src.includes('.svg'));
+          
+          if (realImages.length > 0) {
+            hasImage = true;
+            let targetImg = realImages[0];
+            let altText = targetImg.getAttribute('alt');
+            let srcText = targetImg.src || "";
+            
+            // จัดระเบียบข้อความที่จะส่งไป Column C ให้เป็นภาษาคน
+            if (altText && altText.trim() !== "") {
+              imageDetail = altText;
+            } else if (srcText.startsWith('blob:') || srcText.startsWith('data:image/')) {
+              imageDetail = "มีรูปถ่ายแนบ (ไฟล์ในระบบ)";
+            } else {
+              let urlParts = srcText.split('/');
+              let fileName = urlParts[urlParts.length - 1].split('?')[0]; 
+              imageDetail = fileName.length > 30 ? "มีรูปถ่ายแนบ" : fileName;
+            }
+            break; // เจอรูปจริงแล้ว ให้ออกจากลูปรอทันที
+          }
+        }
+        await sleep(1000); // รอ 1 วิแล้วเช็คใหม่
+      }
+
+      console.log(`📸 สถานะ: ${hasImage ? 'มีรูปภาพ' : 'ไม่มีรูป'} | ข้อมูล: ${imageDetail}`);
+
+      // อัปเดต Google Sheet
+      fetch(WEB_APP_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ 
+          action: "updateStatus", 
+          id: jobId, 
+          hasImage: hasImage,
+          imageDetail: imageDetail 
+        }),
+      }).catch(err => console.error("Error updating sheet:", err));
+
+      // 5: กดอนุมัติ (ถ้ามีรูป)
+      if (hasImage) {
+        let approveBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('อนุมัติงาน'));
+        if (approveBtn) {
+          approveBtn.click();
+          console.log("✅ กดปุ่ม 'อนุมัติงาน'");
+          await sleep(2000); 
+          
+          let confirmBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('ยืนยัน'));
+          if (confirmBtn) {
+            confirmBtn.click();
+            console.log("✅ กดปุ่ม 'ยืนยัน'");
+            await sleep(2000); 
+          }
+        }
+      }
+
+      // 6: กดปุ่ม Back กลับ
+      let paths = document.querySelectorAll('svg path');
+      let backBtn = null;
+      for (let path of paths) {
+        if (path.getAttribute('d') === "M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z") {
+          backBtn = path.closest('button');
+          break;
+        }
+      }
+      
+      if (backBtn) {
+        backBtn.click();
+      } else {
+        window.history.back();
+      }
+      
+      await sleep(3500); // รอหน้าหลักโหลดเสร็จก่อนเริ่มใบงานต่อไป
+
+    } catch (e) {
+      console.error(`❌ ข้อผิดพลาดใบงาน ${jobId}:`, e.message);
+      window.history.back();
+      await sleep(3000);
+    }
+  }
+
+  console.log("🎉 ดำเนินการตรวจสอบครบทุกรายการแล้ว!");
+}
+
+autoProcessJobs();
